@@ -1,9 +1,7 @@
-name: CI
-
+name: CI-Windows-BuildOnly
 on:
   push:
     branches: [master, dev]
-    tags: ["v*"]
   pull_request:
     branches: [master, dev]
   workflow_dispatch:
@@ -15,257 +13,26 @@ permissions:
   contents: read
 
 jobs:
-  validate-tag:
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+  build-windows-exe:
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: python3 scripts/artifacts.py tag
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: "3.12"
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: python scripts/validate.py fmt
-      - run: python scripts/validate.py check
-      - run: python scripts/validate.py lint
-      - run: python scripts/validate.py tooling-tests
-      - run: python scripts/validate.py capabilities
-      - run: python scripts/validate.py diagnostics
-      - run: python scripts/validate.py regression
-      - run: python scripts/validate.py compatibility
-      - run: python scripts/validate.py backup-contracts
+          targets: x86_64-pc-windows-msvc
 
-  feature-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: python3 scripts/validate.py features
-      - uses: actions/upload-artifact@v4
-        if: always()
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release exe
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Upload Windows exe artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: feature-logs
-          path: target/validation/features/*.log
+          name: rust-ios-device-windows-exe
+          path: target/x86_64-pc-windows-msvc/release/rust-ios-device.exe
           if-no-files-found: error
-
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.80"
-      - uses: Swatinem/rust-cache@v2
-      - run: python3 scripts/validate.py msrv
-
-  build-and-test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: python scripts/validate.py rust-tests
-      - run: python scripts/validate.py docs
-      - run: python scripts/validate.py ffi
-
-  python-smoke:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.9", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: astral-sh/setup-uv@v5
-      - uses: Swatinem/rust-cache@v2
-      - name: Install target Python runtime
-        shell: bash
-        run: |
-          uv python install ${{ matrix.python }}
-          echo "TARGET_PYTHON=$(uv python find ${{ matrix.python }})" >> "$GITHUB_ENV"
-      - run: python scripts/validate.py python-host --python "${{ env.TARGET_PYTHON }}"
-      - run: python scripts/validate.py python-package --python "${{ env.TARGET_PYTHON }}"
-
-  # Candidate artifacts are also tested on PRs, before any publishing.
-  native-artifacts:
-    needs: [check, feature-check, msrv, build-and-test, python-smoke]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-          - target: x86_64-pc-windows-msvc
-            runner: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-      - run: python scripts/validate.py ffi
-      - run: python scripts/artifacts.py native --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: native-${{ matrix.target }}
-          path: dist/*
-          if-no-files-found: error
-
-  python-wheels:
-    needs: [check, feature-check, msrv, build-and-test, python-smoke]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-          - target: x86_64-pc-windows-msvc
-            runner: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: astral-sh/setup-uv@v5
-      - uses: Swatinem/rust-cache@v2
-      - name: Build abi3 wheel
-        working-directory: crates/ios-py
-        run: uvx --from "maturin>=1.5,<2" maturin build --release --locked --target ${{ matrix.target }} --out ../../dist
-      - name: Verify on minimum and newer Python
-        run: |
-          uv python install 3.9 3.13
-          python scripts/artifacts.py python --directory dist --python 3.9
-          python scripts/artifacts.py python --directory dist --python 3.13
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.target }}
-          path: dist/*
-          if-no-files-found: error
-
-  python-sdist:
-    needs: [check, feature-check, msrv, build-and-test, python-smoke]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: astral-sh/setup-uv@v5
-      - uses: Swatinem/rust-cache@v2
-      - name: Build wheel and source distribution
-        working-directory: crates/ios-py
-        run: |
-          uvx --from "maturin>=1.5,<2" maturin build --locked --out ../../dist
-          uvx --from "maturin>=1.5,<2" maturin sdist --out ../../dist
-      - run: python scripts/artifacts.py python --directory dist --build-sdist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: |
-            dist/*.tar.gz
-            dist/*.tar.gz.sha256
-          if-no-files-found: error
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [validate-tag, native-artifacts, python-wheels, python-sdist]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: native-*
-          path: dist
-          merge-multiple: true
-      - run: python3 scripts/artifacts.py verify-native --directory dist
-      - uses: softprops/action-gh-release@v2
-        with:
-          fail_on_unmatched_files: true
-          files: dist/*
-
-  publish-pypi:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [validate-tag, native-artifacts, python-wheels, python-sdist]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-*
-          path: dist
-          merge-multiple: true
-      - uses: actions/download-artifact@v4
-        with:
-          name: sdist
-          path: dist
-      - name: Verify downloaded checksums and prepare upload
-        run: |
-          cd dist
-          sha256sum --check -- *.sha256
-          rm -- *.sha256
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          packages-dir: dist/
-
-  publish-crates:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [validate-tag, native-artifacts, python-wheels, python-sdist]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/native-deps
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Publish in dependency order
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: scripts/publish-crates.sh
