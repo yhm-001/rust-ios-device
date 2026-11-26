@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tokio::io::AsyncReadExt;
 
 #[derive(clap::Args)]
 pub struct FileCmd {
@@ -309,7 +310,7 @@ FileSub::Pull {
     local,
     force,
 } => {
-    ensure_local_overwrite_allowed(Path::new(&local), force)?;
+    ensure_local_overwrite_allowed(std::path::Path::new(&local), force)?;
     crate::output::write_error_line(format_args!(
         "Downloading {} -> {}",
         ios_core::redaction::diagnostic_id(&remote),
@@ -318,81 +319,85 @@ FileSub::Pull {
 
     const CHUNK_SIZE: u64 = 200 * 1024 * 1024;
 
-    // 创建原子输出临时文件（原有安全逻辑完整保留）
-    let mut output = LocalOutput::create(Path::new(&local), force).await?;
+    let mut output = LocalOutput::create(std::path::Path::new(&local), force).await?;
 
-    // 打开远端文件读模式
-    let fd = afc.open_file(&remote, 1).await?;
+    let fd = afc.open_file(&remote, 1).await.map_err(anyhow::Error::from)?;
 
     let mut offset: u64 = 0;
     let mut total_read: u64 = 0;
 
-    let result = async {
+    let res_inner = async {
         loop {
             let chunk = afc.pread(fd, CHUNK_SIZE, offset).await?;
             let n = chunk.len() as u64;
             if n == 0 {
-                break; // EOF
+                break;
             }
             output.file.write_all(&chunk).await?;
             offset += n;
             total_read += n;
         }
-        Ok(())
+        Ok::<(), ios_core::afc::AfcError>(())
     }.await;
 
-    // 无论成功失败，必须关闭远端fd
     let close_res = afc.close_file(fd).await;
 
-    match (result, close_res) {
+    match (res_inner, close_res) {
         (Ok(()), Ok(())) => {
             output.commit().await?;
             crate::output::write_error_line(format_args!("Done ({} bytes)", total_read))?;
         }
-        (Err(e), _) => return Err(e),
-        (Ok(()), Err(e)) => return Err(e),
+        (Err(e), _) => return Err(anyhow::Error::from(e)),
+        (Ok(()), Err(e)) => return Err(anyhow::Error::from(e)),
     }
 }
-
+                
 FileSub::Push { local, remote } => {
     crate::output::write_error_line(format_args!(
         "Uploading {} -> {}",
         ios_core::redaction::diagnostic_id(&local),
-        ios_core::diagnostic_id(&remote)
+        ios_core::redaction::diagnostic_id(&remote)
     ))?;
 
     const CHUNK_SIZE: usize = 200 * 1024 * 1024;
 
-    let mut local_file = fs::File::open(&local).await?;
-    let file_meta = local_file.metadata().await?;
+    let mut local_file = tokio::fs::File::open(&local).await.map_err(anyhow::Error::from)?;
+    let file_meta = local_file.metadata().await.map_err(anyhow::Error::from)?;
     let total_expected = file_meta.len();
 
-    let fd = afc.open_file(&remote, 2).await?;
+    // 打开远端写文件 fd=2 write
+    let fd = afc.open_file(&remote, 2).await.map_err(anyhow::Error::from)?;
+
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut total_written: u64 = 0;
 
-    let result = async {
+    let res_inner = async {
         loop {
             let n_read = local_file.read(&mut buf).await?;
             if n_read == 0 {
                 break;
             }
-            afc.file_ref_write(fd, &buf[0..n_read]).await?;
+            // 没有file_ref_write，使用 pwrite，传入当前 offset
+            afc.pwrite(fd, &buf[0..n_read], total_written).await?;
             total_written += n_read as u64;
         }
-        Ok(())
+        Ok::<(), ios_core::afc::AfcError>(())
     }.await;
 
-    // 无论成功失败都尝试关闭fd
+    // 无论成功失败，关闭fd
     let close_res = afc.close_file(fd).await;
-    match (result, close_res) {
+
+    match (res_inner, close_res) {
         (Ok(()), Ok(())) => {
+            if total_written != total_expected {
+                anyhow::bail!("local file truncated: wrote {} bytes, expected {} bytes", total_written, total_expected);
+            }
             crate::output::write_error_line(format_args!(
                 "Done ({} bytes, expected {})", total_written, total_expected
             ))?;
         }
-        (Err(e), _) => return Err(e),
-        (Ok(()), Err(e)) => return Err(e),
+        (Err(e), _) => return Err(anyhow::Error::from(e)),
+        (Ok(()), Err(e)) => return Err(anyhow::Error::from(e)),
     }
 }
                 
