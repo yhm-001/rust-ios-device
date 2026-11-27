@@ -26,12 +26,12 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       # =====官方vcpkg action，自带缓存，不需要手写actions/cache=====
+# 修正组织名 microsoft/run‑vcpkg
       - name: Setup vcpkg & install openssl
-        uses: actions/run-vcpkg@v11
+        uses: microsoft/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: 'a8f39c024f30eb0a563c1233901f753cfe5f9208' #锁定vcpkg提交，固定ABI，防止版本漂移
+          vcpkgGitCommitId: 'a8f39c024f30eb0a563c1233901f753cfe5f9208'
           vcpkgArguments: openssl:x64-windows-static
-          # 开启vcpkg内置二进制缓存（actions缓存自动管理packages/downloads/installed）
           vcpkgBinaryCache: true
 
       - name: Set openssl‑sys environment variables
