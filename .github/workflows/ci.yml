@@ -22,32 +22,33 @@ jobs:
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Load MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+      # vcpkg在github windows‑latest runner默认位置C:\vcpkg
+      - name: Cache vcpkg artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\packages
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
+          key: vcpkg-openssl-x64-windows-static-md
 
-      # 使用 openssl‑sys vendored 内置源码编译openssl，移除全部vcpkg逻辑
-      - name: Use vendored openssl‑sys
-        run: |
-          echo "OPENSSL_VENDORED=1" >> $env:GITHUB_ENV
-          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+      # 调用项目内置复合action，处理msvc+vcpkg openssl，自动输出全部环境变量
+      - name: Setup native dependencies(OpenSSL/MSVC)
+        uses: ./.github/actions/native-deps
 
-      # Rust workspace缓存，开启cache‑workspaces适配多crate项目
       - name: Cargo build cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-workspaces: true
           save-if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
 
-      # 关键：-p ios‑cli 指定编译二进制包，产物为 target/release/ios.exe
       - name: Build release exe
         run: cargo build --release -p ios-cli
 
-      # 调试步骤：打印release目录内容，方便排查文件缺失
       - name: List target/release (debug)
         if: always()
         run: Get-ChildItem target/release -ErrorAction SilentlyContinue
 
-      # 仅编译成功才执行上传；路径修正为ios.exe
       - name: Upload Windows exe artifact
         uses: actions/upload-artifact@v4
         if: success()
