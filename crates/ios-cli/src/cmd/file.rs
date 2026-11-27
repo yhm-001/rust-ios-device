@@ -320,7 +320,7 @@ FileSub::Pull {
     let mut output = LocalOutput::create(std::path::Path::new(&local), force).await?;
 
     // =========新增：获取远端文件stat拿到总大小=========
-    let total_size = match afc.file_info(&remote).await {
+    let total_size = match afc.stat_info(&remote).await {
         Ok(stat) => stat.size,
         Err(_) => {
             // house‑arrest下stat失败降级，spinner模式，没有总大小
