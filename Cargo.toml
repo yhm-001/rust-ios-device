@@ -90,6 +90,7 @@ arboard      = { version = "3.6", default-features = false }
 tar          = { version = "0.4", default-features = false }
 crc32fast    = "1"
 libc         = "0.2"
+indicatif    = "0.17"
 
 # 放在根级别，不要放到 [workspace] 内部
 [profile.release]
