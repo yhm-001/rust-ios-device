@@ -2,14 +2,12 @@
 members = [
     "crates/ios-core",
     "crates/ios-cli",
-    "crates/ios-py",
-    "crates/ios-ffi",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.17"
-edition = "2021"
+edition = "2026"
 authors = ["oslo254804746"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/oslo254804746/rust-ios-device"
@@ -92,3 +90,18 @@ arboard      = { version = "3.6", default-features = false }
 tar          = { version = "0.4", default-features = false }
 crc32fast    = "1"
 libc         = "0.2"
+
+# 放在根级别，不要放到 [workspace] 内部
+[profile.release]
+# strip剥离调试符号，3种模式: debug,symbols,none
+# symbols：只剥离调试符号，保留动态链接符号；release推荐这个
+strip = "symbols"
+# debug=全部删掉符号，适合完全发布，panic没有行号
+# strip = "debug"
+
+# 额外优化选项，进一步缩体积
+opt-level = 3
+lto = true          # LTO链接时优化，大幅删除死代码，体积变小，编译变慢
+codegen-units = 1   # 和LTO配合，最大化死代码消除
+panic = "abort"     # 可选：panic直接abort，减少panic unwind代码，体积更小；代价：不能捕获panic
+
