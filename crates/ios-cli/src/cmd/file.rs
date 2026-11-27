@@ -316,16 +316,28 @@ FileSub::Pull {
         ios_core::redaction::diagnostic_id(&remote),
         ios_core::redaction::diagnostic_id(&local)
     ))?;
-
-    const CHUNK_SIZE: u64 = 200 * 1024 * 1024;
-
+    const CHUNK_SIZE: u64 = 32 * 1024 * 1024;
     let mut output = LocalOutput::create(std::path::Path::new(&local), force).await?;
 
-    let fd = afc.open_file(&remote, 1).await.map_err(anyhow::Error::from)?;
+    // =========新增：获取远端文件stat拿到总大小=========
+    let total_size = match afc.get_file_info(&remote).await {
+        Ok(stat) => stat.size,
+        Err(_) => {
+            // house‑arrest下stat失败降级，spinner模式，没有总大小
+            0
+        }
+    };
+    // 构建进度条
+    let pb = indicatif::ProgressBar::new(total_size);
+    pb.set_style(indicatif::ProgressStyle::default_bar()
+        .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+    pb.set_message("Pulling file");
 
+    let fd = afc.open_file(&remote, 1).await.map_err(anyhow::Error::from)?;
     let mut offset: u64 = 0;
     let mut total_read: u64 = 0;
-
     let res_inner = async {
         loop {
             let chunk = afc.pread(fd, CHUNK_SIZE, offset).await?;
@@ -336,11 +348,15 @@ FileSub::Pull {
             output.file.write_all(&chunk).await?;
             offset += n;
             total_read += n;
+
+            // 更新进度条
+            pb.set_position(total_read);
         }
         Ok::<(), ios_core::afc::AfcError>(())
     }.await;
-
     let close_res = afc.close_file(fd).await;
+
+    pb.finish_and_clear(); // 结束进度条
 
     match (res_inner, close_res) {
         (Ok(()), Ok(())) => {
@@ -351,26 +367,30 @@ FileSub::Pull {
         (Ok(()), Err(e)) => return Err(anyhow::Error::from(e)),
     }
 }
-                
+
 FileSub::Push { local, remote } => {
     crate::output::write_error_line(format_args!(
         "Uploading {} -> {}",
         ios_core::redaction::diagnostic_id(&local),
         ios_core::redaction::diagnostic_id(&remote)
     ))?;
-
-    const CHUNK_SIZE: usize = 200 * 1024 * 1024;
-
+    const CHUNK_SIZE: usize = 32 * 1024 * 1024;
     let mut local_file = tokio::fs::File::open(&local).await.map_err(anyhow::Error::from)?;
     let file_meta = local_file.metadata().await.map_err(anyhow::Error::from)?;
     let total_expected = file_meta.len();
 
+    // =========新增进度条=========
+    let pb = indicatif::ProgressBar::new(total_expected);
+    pb.set_style(indicatif::ProgressStyle::default_bar()
+        .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+    pb.set_message("Pushing file");
+
     // 打开远端写文件 fd=2 write
     let fd = afc.open_file(&remote, 2).await.map_err(anyhow::Error::from)?;
-
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut total_written: u64 = 0;
-
     let res_inner = async {
         loop {
             let n_read = local_file.read(&mut buf).await?;
@@ -380,13 +400,17 @@ FileSub::Push { local, remote } => {
             // 没有file_ref_write，使用 pwrite，传入当前 offset
             afc.pwrite(fd, &buf[0..n_read], total_written).await?;
             total_written += n_read as u64;
+
+            // 更新进度
+            pb.set_position(total_written);
         }
         Ok::<(), ios_core::afc::AfcError>(())
     }.await;
 
+    pb.finish_and_clear();
+
     // 无论成功失败，关闭fd
     let close_res = afc.close_file(fd).await;
-
     match (res_inner, close_res) {
         (Ok(()), Ok(())) => {
             if total_written != total_expected {
@@ -400,6 +424,8 @@ FileSub::Push { local, remote } => {
         (Ok(()), Err(e)) => return Err(anyhow::Error::from(e)),
     }
 }
+                
+
                 
                 FileSub::Rm { path, recursive } => {
                     if recursive {
