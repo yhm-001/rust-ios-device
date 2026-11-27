@@ -12,6 +12,8 @@ use serde_json::json;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::io::AsyncReadExt;
+use indicatif::ProgressBar;
+use indicatif::ProgressStyle;
 
 #[derive(clap::Args)]
 pub struct FileCmd {
