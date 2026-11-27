@@ -22,41 +22,36 @@ jobs:
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # 缓存vcpkg的openssl静态库，避免每次重新下载编译openssl
-      - name: Cache vcpkg
-        uses: actions/cache@v4
-        with:
-          path: C:\vcpkg\installed\x64-windows-static
-          key: vcpkg-openssl-x64-static
-
       - name: Load MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install OpenSSL via vcpkg
-        run: vcpkg install openssl:x64-windows-static
+      # =====官方vcpkg action，自带缓存，不需要手写actions/cache=====
+      - name: Setup vcpkg & install openssl
+        uses: actions/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'a8f39c024f30eb0a563c1233901f753cfe5f9208' #锁定vcpkg提交，固定ABI，防止版本漂移
+          vcpkgArguments: openssl:x64-windows-static
+          # 开启vcpkg内置二进制缓存（actions缓存自动管理packages/downloads/installed）
+          vcpkgBinaryCache: true
 
       - name: Set openssl‑sys environment variables
         run: |
           echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static" >> $env:GITHUB_ENV
           echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
 
-      # Rust workspace缓存，开启cache‑workspaces适配多crate项目
       - name: Cargo build cache
         uses: Swatinem/rust-cache@v2
         with:
           cache-workspaces: true
           save-if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
 
-      # 关键：-p ios‑cli 指定编译二进制包，产物为 target/release/ios.exe
       - name: Build release exe
         run: cargo build --release -p ios-cli
 
-      # 调试步骤：打印release目录内容，方便排查文件缺失
       - name: List target/release (debug)
         if: always()
         run: Get-ChildItem target/release -ErrorAction SilentlyContinue
 
-      # 仅编译成功才执行上传；路径修正为ios.exe
       - name: Upload Windows exe artifact
         uses: actions/upload-artifact@v4
         if: success()
